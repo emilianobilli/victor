@@ -25,5 +25,6 @@
 
 float32_t euclidean_distance(float32_t *v1, float32_t *v2, int dims);
 float32_t cosine_similarity(float32_t *v1, float32_t *v2, int dims);
-
+int euclidean_distance_best(float32_t a, float32_t b);
+int cosine_similarity_best(float32_t a, float32_t b);
 #endif 

@@ -48,8 +48,13 @@ struct table {
     int svec_size;
 
     int cmpmode;
+    float32_t worst_match_value;
+
     int index;
-    float32_t (*cmpvec)(float32_t *, float32_t *, int);
+
+    int       (*is_better_match) (float32_t,   float32_t);
+    float32_t (*compare_vectors) (float32_t *, float32_t *, int);
+    
     struct bucket *buckets[MAX_BUCKETS];
 };
 
@@ -59,7 +64,7 @@ struct table {
 
 typedef struct {
     int id;
-    float32_t val;
-} victor_retval_t;
+    float32_t distance;
+} match_result_t;
 
 #endif /* VICTOR_TYPES */

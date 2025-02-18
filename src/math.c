@@ -65,6 +65,10 @@ float32_t euclidean_distance(float32_t *v1, float32_t *v2, int dims) {
     return sqrtf(sum);
 }
 
+int euclidean_distance_best(float32_t a, float32_t b) {
+    return (a < b) ? 1: 0;
+}
+
 /**
  * @brief Computes the cosine similarity between two vectors.
  *
@@ -120,4 +124,8 @@ float32_t cosine_similarity(float32_t *v1, float32_t *v2, int dims) {
     if (norm1 == 0.0f || norm2 == 0.0f) return 0.0f;
 
     return dot / (norm1 * norm2);
+}
+
+int cosine_similarity_best(float32_t a, float32_t b) {
+    return (a > b) ? 1 : 0;
 }

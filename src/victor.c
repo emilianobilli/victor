@@ -113,78 +113,10 @@ static void free_bucket(struct bucket **bucket_ptr) {
  * @note The slot index is stored in the least significant 24 bits.
  * @note The function is `static inline` for efficient inlining at compile time.
  */
-static inline int32_t generate_id(int8_t bucket, uint32_t slot) {
+static inline int32_t encode_vector_id(int8_t bucket, uint32_t slot) {
     return ((int32_t)bucket << 24) | (slot & 0x00FFFFFF);
 }
 
-
-/**
- * @brief Finds the most similar vector in the table within a given threshold.
- *
- * This function searches for the most similar vector to the given query 
- * `vector` within all stored vectors in the `table`. The similarity 
- * measure is determined by the comparison mode (`cmpmode`) set in the 
- * table structure. 
- *
- * If a vector is found that satisfies the threshold condition, the search 
- * terminates early and returns the corresponding ID and similarity/distance 
- * value.
- *
- * @param table Pointer to the table containing stored vectors.
- * @param vector Pointer to the query vector (array of float32_t).
- * @param thold The threshold value for early stopping. If a vector 
- *        meets this threshold, the function returns immediately.
- * @return A `victor_retval_t` structure containing:
- *         - `id`: The ID of the most similar vector found (`-1` if none found).
- *         - `val`: The computed similarity or distance value.
- *
- * @note The function uses the `cmpvec` function pointer inside `table`
- *       to determine similarity (e.g., Euclidean distance or cosine similarity).
- * @note The search stops early if a vector meets the threshold condition.
- * @note If no vector is found within the threshold, the function returns the 
- *       best match available.
- */
-victor_retval_t victor_cmpvec_th(struct table *table, float32_t *vector, float32_t thold) {
-    victor_retval_t ret;
-    struct bucket *b;
-    float32_t val = (table->cmpmode == L2NORM) ? INFINITY : -1.0f;
-    float32_t tmp;
-    int32_t id = -1;
-    int i, j;
-
-    for (i = 0; i <= table->index; i++) {
-        b = table->buckets[i];
-        if (b == NULL) continue;
-        
-        for (j = 0; j < b->index; j++) {
-            if (b->svec[j] == NULL) continue;
-            
-            tmp = table->cmpvec(b->svec[j], vector, table->dims_aligned);
-
-            switch (table->cmpmode) {
-                case L2NORM:
-                    if (tmp < val) {
-                        id = generate_id(i, j);
-                        val = tmp;
-                        if (val < thold) goto end;
-                    }
-                    break;
-
-                case COSINE:
-                    if (tmp > val) {
-                        id = generate_id(i, j);
-                        val = tmp;
-                        if (val > thold) goto end;
-                    }
-                    break;
-            }
-        }
-    }
-end:
-    ret.id = id;
-    ret.val = val;
-    return ret;
-}
 
 /**
  * @brief Finds the most similar vector in the table without a threshold constraint.
@@ -207,12 +139,12 @@ end:
  * @note If no vectors are stored in the table, the function returns `id = -1`
  *       and a default value for `val` (e.g., `INFINITY` for distances).
  */
-victor_retval_t victor_cmpvec(struct table *table, float32_t *vector) {
-    victor_retval_t ret;
+match_result_t search_better_match(struct table *table, float32_t *vector) {
+    match_result_t ret;
     struct bucket *b;
-    float32_t val = (table->cmpmode == L2NORM) ? INFINITY : -1.0f;
+    float32_t val = table->worst_match_value;
     float32_t tmp;
-    int32_t id = -1;
+    int32_t vid = -1;
     int i, j;
 
     for (i = 0; i <= table->index; i++) {
@@ -222,27 +154,15 @@ victor_retval_t victor_cmpvec(struct table *table, float32_t *vector) {
         for (j = 0; j < b->index; j++) {
             if (b->svec[j] == NULL) continue;
             
-            tmp = table->cmpvec(b->svec[j], vector, table->dims_aligned);
-
-            switch (table->cmpmode) {
-                case L2NORM:
-                    if (tmp < val) {
-                        id = generate_id(i, j);
-                        val = tmp;
-                    }
-                    break;
-
-                case COSINE:
-                    if (tmp > val) {
-                        id = generate_id(i, j);
-                        val = tmp;
-                    }
-                    break;
+            tmp = table->compare_vectors(b->svec[j], vector, table->dims_aligned);
+            if (table->is_better_match(tmp, val)) {
+                vid = encode_vector_id(i, j);
+                val = tmp;
             }
         }
     }
-    ret.id = id;
-    ret.val = val;
+    ret.id = vid;
+    ret.distance = val;
     return ret;
 }
 
@@ -262,7 +182,7 @@ victor_retval_t victor_cmpvec(struct table *table, float32_t *vector) {
  * @note The ID format includes both the bucket index and the vector's position within it.
  * @note The function does not check for duplicate vectors.
  */
-int victor_insert(struct table *table, float32_t *vector) {
+int insert_vector(struct table *table, float32_t *vector) {
     struct bucket *b = table->buckets[table->index];
     int id;
     if (b->index >= table->svec_size) {
@@ -278,7 +198,7 @@ int victor_insert(struct table *table, float32_t *vector) {
     }
     memcpy(b->svec[b->index], vector, (table->dims * sizeof(float32_t)));
     memset(b->svec[b->index] + table->dims, 0, (table->dims_aligned - table->dims) * sizeof(float32_t));
-    id = (int) generate_id(table->index, b->index);
+    id = (int) encode_vector_id(table->index, b->index);
     b->index++;
     return id;
 }
@@ -299,7 +219,7 @@ int victor_insert(struct table *table, float32_t *vector) {
  * @note The ID is structured with the bucket index in the higher bits and the slot index in the lower bits.
  * @note If the ID is out of bounds or references a non-existent vector, the function returns `-1`.
  */
-int victor_delete(struct table *table, int id) {
+int delete_vector(struct table *table, int id) {
     int ib = (int8_t)(id >> 24); 
     int iv = id & 0x00FFFFFF;
 
@@ -340,10 +260,14 @@ struct table *victor_table(int dims, int cmpmode) {
     t->cmpmode = cmpmode;
     switch (cmpmode) {
         case L2NORM:
-            t->cmpvec = euclidean_distance;
+            t->compare_vectors = euclidean_distance;
+            t->is_better_match = euclidean_distance_best;
+            t->worst_match_value = INFINITY;
             break;
         case COSINE:
-            t->cmpvec = cosine_similarity;
+            t->compare_vectors = cosine_similarity;
+            t->is_better_match = cosine_similarity_best;
+            t->worst_match_value = -1.0f;
             break;
         default:
             free(t);
@@ -359,4 +283,28 @@ struct table *victor_table(int dims, int cmpmode) {
     return t;
 }
 
-
+/**
+ * @brief Frees the memory allocated for a vector table and its associated buckets.
+ *
+ * This function deallocates all memory associated with the given `table` structure, 
+ * including its buckets. It ensures that no memory leaks occur and sets the table 
+ * pointer to `NULL` after deallocation.
+ *
+ * @param table A double pointer to the `struct table` to be freed.
+ *
+ * @note This function safely handles NULL pointers to avoid segmentation faults.
+ * @note Assumes `MAX_BUCKETS` defines the maximum number of buckets allocated.
+ *
+ * @warning If the `buckets` array was dynamically allocated, it should be freed separately 
+ *          before calling this function to prevent memory leaks.
+ */
+void free_table(struct table **table){
+    int i;
+    if (table == NULL || *table == NULL)
+        return;
+    for (i = 0; i < MAX_BUCKETS; i++) 
+        if ((*table)->buckets[i])
+            free_bucket(&(*table)->buckets[i]);
+    free(*table);
+    *table = NULL;
+}

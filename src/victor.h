@@ -25,9 +25,8 @@
 #include "types.h"
 
 extern struct table *victor_table(int dims, int cmpmode);
-extern int victor_insert(struct table *table, float32_t *vector);
-extern int victor_delete(struct table *table, int id);
-extern victor_retval_t victor_cmpvec_th(struct table *table, float32_t *vector, float32_t thold);
-extern victor_retval_t victor_cmpvec(struct table *table, float32_t *vector);
-
+extern int insert_vector(struct table *table, float32_t *vector);
+extern int delete_vector(struct table *table, int id);
+extern match_result_t search_better_match(struct table *table, float32_t *vector);
+extern void free_table(struct table **table);
 #endif
