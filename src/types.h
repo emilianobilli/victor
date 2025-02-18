@@ -34,6 +34,8 @@
 
 #define SVEC_SIZE(d) (STORE_SIZE / ((d) * sizeof(float32_t))) 
 
+typedef float float32_t;
+
 struct bucket {
     int index;
     float32_t **svec;
@@ -54,8 +56,6 @@ struct table {
 
 #define L2NORM 0x01
 #define COSINE 0x02
-
-typedef float float32_t;
 
 typedef struct {
     int id;

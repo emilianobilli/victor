@@ -28,6 +28,6 @@ extern struct table *victor_table(int dims, int cmpmode);
 extern int victor_insert(struct table *table, float32_t *vector);
 extern int victor_delete(struct table *table, int id);
 extern victor_retval_t victor_cmpvec_th(struct table *table, float32_t *vector, float32_t thold);
-extern victor_retval_t victor_cmpvec(struct table *table, float32_t *vector, float32_t thold);
+extern victor_retval_t victor_cmpvec(struct table *table, float32_t *vector);
 
 #endif
