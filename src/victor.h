@@ -28,5 +28,6 @@ extern struct table *victor_table(int dims, int cmpmode);
 extern int insert_vector(struct table *table, float32_t *vector);
 extern int delete_vector(struct table *table, int id);
 extern match_result_t search_better_match(struct table *table, float32_t *vector);
+extern int search_better_n_match(struct table *table, float32_t *vector, match_result_t **result, int n);
 extern void free_table(struct table **table);
 #endif

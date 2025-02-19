@@ -140,12 +140,15 @@ static inline int32_t encode_vector_id(int8_t bucket, uint32_t slot) {
  *       and a default value for `val` (e.g., `INFINITY` for distances).
  */
 match_result_t search_better_match(struct table *table, float32_t *vector) {
-    match_result_t ret;
+    match_result_t result;
     struct bucket *b;
-    float32_t val = table->worst_match_value;
     float32_t tmp;
-    int32_t vid = -1;
     int i, j;
+
+    result.distance = table->worst_match_value;
+    result.id = -1;
+    
+
 
     for (i = 0; i <= table->index; i++) {
         b = table->buckets[i];
@@ -155,15 +158,80 @@ match_result_t search_better_match(struct table *table, float32_t *vector) {
             if (b->svec[j] == NULL) continue;
             
             tmp = table->compare_vectors(b->svec[j], vector, table->dims_aligned);
-            if (table->is_better_match(tmp, val)) {
-                vid = encode_vector_id(i, j);
-                val = tmp;
+            if (table->is_better_match(tmp, result.distance)) {
+                result.id = encode_vector_id(i, j);
+                result.distance = tmp;
             }
         }
     }
-    ret.id = vid;
-    ret.distance = val;
-    return ret;
+    return result;
+}
+
+static void shift_right_mr(match_result_t *result, int len) {
+    int i;
+    for (i = len-1; i > 0; i--) {
+        result[i].id = result[i-1].id;
+        result[i].distance = result[i-1].distance;
+    }
+    return;
+}
+
+/**
+ * @brief Searches for the n best matching vectors in the table.
+ *
+ * This function iterates over all the buckets and vectors stored in the given table,
+ * comparing each vector with the query vector using the table's compare_vectors function.
+ * It maintains an array of n best match results (each of type match_result_t) sorted by 
+ * increasing distance (or, equivalently, by better match criteria as defined in is_better_match).
+ * When a new candidate vector is found that is better than one of the current n best matches,
+ * the function shifts the existing matches to make room for the new candidate using shift_right_mr.
+ *
+ * @param table Pointer to the table structure containing stored vectors, buckets, and the comparison functions.
+ * @param vector Pointer to the query vector (array of float32_t) for which matches are sought.
+ * @param result Address of a pointer where the function will allocate an array of n match_result_t structures 
+ *               representing the n best matches.
+ * @param n The number of best match results to return.
+ * @return 0 on success, or -1 if memory allocation fails.
+ *
+ * @note The function initializes the result array with a default worst_match_value and an id of -1 for each entry.
+ * @note It uses table->compare_vectors to compute a distance (or similarity) between vectors, and table->is_better_match 
+ *       to decide whether a new candidate is a better match compared to an existing result.
+ * @note The new candidate is inserted in the result array at the appropriate position after shifting the elements 
+ *       (via shift_right_mr) starting from that position.
+ * @note The allocated result array must be freed by the caller when no longer needed.
+ */
+int search_better_n_match(struct table *table, float32_t *vector, match_result_t **result, int n) {
+    struct bucket *b;
+    float32_t tmp;
+    int i, j, k;
+    *result = malloc(n * sizeof(match_result_t));
+    if (*result == NULL) return -1;
+    
+    for (i = 0; i <n; i++) {
+        (*result)[i].distance = table->worst_match_value;
+        (*result)[i].id = -1;
+    }
+
+    for (i = 0; i <= table->index; i++) {
+        b = table->buckets[i];
+        if (b == NULL) continue;
+        
+        for (j = 0; j < b->index; j++) {
+            if (b->svec[j] == NULL) continue;
+            
+            tmp = table->compare_vectors(b->svec[j], vector, table->dims_aligned);
+
+            for (k = 0; k < n; k++) {
+                if (table->is_better_match(tmp, (*result)[k].distance)) {
+                    shift_right_mr(&(*result)[k], n-k-1);
+                    (*result)[k].distance = tmp;
+                    (*result)[k].id = encode_vector_id(i, j);
+                    break;
+                }
+            }
+        }
+    }
+    return 0;
 }
 
 /**

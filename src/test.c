@@ -4,7 +4,7 @@
 #include "victor.h"
 
 #define DIMS 128  // Vector dimensions
-#define NUM_VECTORS 100000  // Number of vectors to insert
+#define NUM_VECTORS 200000  // Number of vectors to insert
 
 float32_t vectors[NUM_VECTORS][DIMS];
 int ids[NUM_VECTORS];
@@ -14,7 +14,7 @@ int main() {
     srand(time(NULL));
 
     // Create a vector table
-    struct table *vec_table = victor_table(DIMS, L2NORM);
+    struct table *vec_table = victor_table(DIMS, COSINE);
     if (vec_table == NULL) {
         printf("Error: Failed to create vector table.\n");
         return EXIT_FAILURE;
@@ -44,10 +44,11 @@ int main() {
     }
 
     // Find the most similar vector without threshold
-    match_result_t result = search_better_match(vec_table, vectors[(NUM_VECTORS-1)/2]);
+    match_result_t *result;
+    search_better_n_match(vec_table, vectors[(NUM_VECTORS-1)/2], &result,5);
     printf("\n🔍 Closest vector found:\n");
-    printf("  - ID: %d\n", result.id);
-    printf("  - Distance: %f\n", result.distance);
+    printf("  - ID: %d\n", result[1].id);
+    printf("  - Distance: %f\n", result[1].distance);
 
     free_table(&vec_table);
     return EXIT_SUCCESS;
