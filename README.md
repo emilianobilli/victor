@@ -1,4 +1,4 @@
-# VictorDB - High-Performance In-Memory Vector Cache Database
+# Victor - High-Performance In-Memory Vector Cache Database
 
 VictorDB is a lightweight, high-performance **in-memory vector cache database** optimized for **fast similarity search**. It dynamically allocates memory in **buckets** to store vectors efficiently and supports multiple similarity measures.
 
