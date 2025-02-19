@@ -46,7 +46,7 @@ int main() {
     // Find the most similar vector without threshold
     match_result_t *result;
     search_better_n_match(vec_table, vectors[(NUM_VECTORS-1)/2], &result,5);
-    printf("\n🔍 Closest vector found:\n");
+    printf("\nClosest vector found:\n");
     printf("  - ID: %d\n", result[1].id);
     printf("  - Distance: %f\n", result[1].distance);
 
