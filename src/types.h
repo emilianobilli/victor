@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
 
 #define STORE_SIZE (1024*1024)
 #define ALIGN_DIMS(d) (((d) + 3) & ~3)
@@ -47,6 +48,8 @@ struct table {
     int dims_aligned;
     int svec_size;
 
+    pthread_rwlock_t rwlock;
+
     int cmpmode;
     float32_t worst_match_value;
 
@@ -58,6 +61,7 @@ struct table {
     struct bucket *buckets[MAX_BUCKETS];
 };
 
+typedef struct table table_t;
 
 #define L2NORM 0x01
 #define COSINE 0x02

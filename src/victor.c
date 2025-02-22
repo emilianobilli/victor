@@ -145,6 +145,8 @@ match_result_t search_better_match(struct table *table, float32_t *vector) {
     float32_t tmp;
     int i, j;
 
+    pthread_rwlock_rdlock(&table->rwlock);
+
     result.distance = table->worst_match_value;
     result.id = -1;
     
@@ -164,6 +166,7 @@ match_result_t search_better_match(struct table *table, float32_t *vector) {
             }
         }
     }
+    pthread_rwlock_unlock(&table->rwlock);
     return result;
 }
 
@@ -207,10 +210,12 @@ int search_better_n_match(struct table *table, float32_t *vector, match_result_t
     *result = malloc(n * sizeof(match_result_t));
     if (*result == NULL) return -1;
     
+    pthread_rwlock_rdlock(&table->rwlock);
     for (i = 0; i <n; i++) {
         (*result)[i].distance = table->worst_match_value;
         (*result)[i].id = -1;
     }
+
 
     for (i = 0; i <= table->index; i++) {
         b = table->buckets[i];
@@ -231,6 +236,7 @@ int search_better_n_match(struct table *table, float32_t *vector, match_result_t
             }
         }
     }
+    pthread_rwlock_unlock(&table->rwlock);
     return 0;
 }
 
@@ -251,23 +257,28 @@ int search_better_n_match(struct table *table, float32_t *vector, match_result_t
  * @note The function does not check for duplicate vectors.
  */
 int insert_vector(struct table *table, float32_t *vector) {
+    pthread_rwlock_wrlock(&table->rwlock);
     struct bucket *b = table->buckets[table->index];
     int id;
     if (b->index >= table->svec_size) {
         if (table->index + 1 < MAX_BUCKETS) {
             b = alloc_bucket(table->dims_aligned);
             if (b == NULL) {
+                pthread_rwlock_unlock(&table->rwlock);
                 return -1;
             }
             table->index++;
             table->buckets[table->index] = b;
-        } else 
+        } else {
+            pthread_rwlock_unlock(&table->rwlock);
             return -1;
+        }
     }
     memcpy(b->svec[b->index], vector, (table->dims * sizeof(float32_t)));
     memset(b->svec[b->index] + table->dims, 0, (table->dims_aligned - table->dims) * sizeof(float32_t));
     id = (int) encode_vector_id(table->index, b->index);
     b->index++;
+    pthread_rwlock_unlock(&table->rwlock);
     return id;
 }
 
@@ -288,6 +299,7 @@ int insert_vector(struct table *table, float32_t *vector) {
  * @note If the ID is out of bounds or references a non-existent vector, the function returns `-1`.
  */
 int delete_vector(struct table *table, int id) {
+    pthread_rwlock_wrlock(&table->rwlock);
     int ib = (int8_t)(id >> 24); 
     int iv = id & 0x00FFFFFF;
 
@@ -296,6 +308,7 @@ int delete_vector(struct table *table, int id) {
         memset(b->svec[iv], 0, table->dims_aligned  * sizeof(float32_t));
         b->svec[iv] = NULL;
     }
+    pthread_rwlock_unlock(&table->rwlock);
     return 0;
 }
 
@@ -320,11 +333,12 @@ struct table *victor_table(int dims, int cmpmode) {
     struct table *t = (struct table *) calloc(1, sizeof(struct table));
     if (t == NULL) return NULL;  // Fallo en la asignación de memoria
 
+
     t->dims = dims;
     t->dims_aligned = ALIGN_DIMS(dims);  // Asegurar alineación a múltiplo de 4
     t->svec_size = SVEC_SIZE(t->dims_aligned);
 
-
+    pthread_rwlock_init(&t->rwlock, NULL);
     t->cmpmode = cmpmode;
     switch (cmpmode) {
         case L2NORM:
@@ -373,6 +387,7 @@ void free_table(struct table **table){
     for (i = 0; i < MAX_BUCKETS; i++) 
         if ((*table)->buckets[i])
             free_bucket(&(*table)->buckets[i]);
+    pthread_rwlock_destroy(&(*table)->rwlock);
     free(*table);
     *table = NULL;
 }

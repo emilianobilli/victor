@@ -10,7 +10,7 @@ OBJS = $(SRCS:.c=.o)
 # Compiler flags (Optimized for ARMv8-A / AArch64)
 CFLAGS = -g -std=c11 -Wall -Wextra -O3 -march=armv8-a+simd -fPIC
 
-LDFLAGS = -lm
+LDFLAGS = -lm -lpthread
 
 all: $(TARGET) $(LIBNAME)
 
