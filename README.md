@@ -13,3 +13,14 @@ VictorDB is written in C and requires a standard GCC/Clang compiler. To build:
 - Delete O(1)
 - Search O(N)
 - Max Mem 128MB
+
+
+## RAG Example
+
+- sudo apt update && sudo apt install -y libgl1 libglib2.0-0
+- sudo apt install gcc
+- pip install opencv-python numpy onnxruntime mediapipe
+- pip install sqlalchemy
+- pip install flask flask-cors requests
+
+

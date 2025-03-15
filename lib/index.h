@@ -29,7 +29,8 @@
 
 #include "types.h"
 
-#define FLAT_INDEX 0x00
+#define FLAT_INDEX    0x00
+#define FLAT_INDEX_MP 0x01
 /**
  * Structure representing an abstract index for vector search.
  * It supports multiple indexing strategies through function pointers.

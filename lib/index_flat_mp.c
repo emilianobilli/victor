@@ -1,5 +1,5 @@
 /*
-* index_flat.c - Flat Index Implementation for Vector Cache Database
+* index_flat_mp.c - Flat Index Implementation for Vector Cache Database
 * 
 * Copyright (C) 2025 Emiliano A. Billi
 *
@@ -39,6 +39,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "iflat_utils.h"
 #include "types.h"
 #include "method.h"
@@ -54,15 +55,25 @@
 */
 typedef struct {
     CmpMethod *cmp;          // Comparison method (L2 norm, cosine similarity, etc.)
-    INodeFlat *head;         // Head of the doubly linked list
-    
+    INodeFlat **heads;       // Head of the doubly linked list
+    long threads;            // Number of threads for parallel search
+    int  rr;                 // Round-robin counter for parallel insert
+
     uint64_t elements;       // Number of elements stored in the index
     uint16_t dims;           // Number of dimensions for each vector
     uint16_t dims_aligned;   // Aligned dimensions for efficient memory access
 
     pthread_rwlock_t rwlock; // Read-write lock for thread safety
-} IndexFlat;
+} IndexFlatMp;
 
+typedef struct {
+    float32_t *vector;
+    uint16_t dims;
+    MatchResult *result;
+    CmpMethod *cmp;
+    INodeFlat *head;
+    pthread_t thread;
+} ThreadData;
 
 
 /*-------------------------------------------------------------------------------------*
@@ -77,8 +88,8 @@ typedef struct {
  *
  * @return Pointer to the initialized IndexFlat structure or NULL on failure.
  */
-static IndexFlat *flat_init(int method, uint16_t dims) {
-    IndexFlat *index = (IndexFlat *) calloc_mem(1,sizeof(IndexFlat));
+static IndexFlatMp *flat_mp_init(int method, uint16_t dims) {
+    IndexFlatMp *index = (IndexFlatMp *) calloc_mem(1,sizeof(IndexFlatMp));
     if (index == NULL)
         return NULL;
 
@@ -87,7 +98,9 @@ static IndexFlat *flat_init(int method, uint16_t dims) {
         free_mem(index);
         return NULL;
     }
-    index->head = NULL;
+    index->rr = 0;
+    index->threads = sysconf(_SC_NPROCESSORS_ONLN) / 2;
+    index->heads = calloc(index->threads, sizeof(INodeFlat *));
     index->elements = 0;
     index->dims = dims;
     index->dims_aligned = ALIGN_DIMS(dims);
@@ -116,17 +129,20 @@ static IndexFlat *flat_init(int method, uint16_t dims) {
  *         INVALID_INDEX if the index pointer is NULL.
  *         INVALID_ID if the vector ID was not found in the index.
  */
-static int flat_delete(void *index, uint64_t id) {
-    IndexFlat *ptr = (IndexFlat *)index;
+static int flat_delete_mp(void *index, uint64_t id) {
+    IndexFlatMp *ptr = (IndexFlatMp *)index;
     int ret;
+    int i;
     if (index == NULL) 
         return INVALID_INDEX;
 
     pthread_rwlock_wrlock(&ptr->rwlock);
-    if ((ret = delete_node(&(ptr->head),id)) == SUCCESS) {
-        ptr->elements--;
+    for (i = 0; i < ptr->threads; i++) {
+        if ((ret = delete_node(&(ptr->heads[i]),id)) == SUCCESS) {
+            ptr->elements--;
+            break;
+        }
     }
-    // Verificar, quiza no estaba
     pthread_rwlock_unlock(&ptr->rwlock);
     return ret;
 }
@@ -162,76 +178,44 @@ static int flat_delete(void *index, uint64_t id) {
  *         SYSTEM_ERROR if memory allocation fails.
  *         INDEX_EMPTY if no elements exist in the index.
  */
-static int flat_search_n(void *index, float32_t *vector, uint16_t dims, MatchResult **result, int n) {
-    IndexFlat *idx = (IndexFlat *)index;
-    INodeFlat *current;
-    float32_t *v;
-    int allocated = 0;
-
-    if (index == NULL) 
-        return INVALID_INDEX;
-    if (vector == NULL)
-        return INVALID_VECTOR;
-    if (dims != idx->dims) 
-        return INVALID_DIMENSIONS;
-    if (result == NULL)
-        return INVALID_RESULT;
-
-    *result = (MatchResult *) calloc_mem(n, sizeof(MatchResult));
-    if (*result == NULL)
-        return SYSTEM_ERROR;
-
-    if (dims < idx->dims_aligned) {
-        v = (float32_t *)calloc_mem(1, idx->dims_aligned * sizeof(float32_t));
-        if (v == NULL) {
-            free_mem(*result);
-            return SYSTEM_ERROR;
-        }
-        allocated = 1;
-        memcpy(v, vector, dims * sizeof(float32_t));
-    } else {
-        v = vector;
-    }
-
-    pthread_rwlock_rdlock(&idx->rwlock);
-
-    current = idx->head;
-    if (current == NULL) {
-        pthread_rwlock_unlock(&idx->rwlock);
-        if (allocated)
-            free_mem(v);
-        free_mem(*result);
-        return INDEX_EMPTY;
-    }
-
-    flat_linear_search_n(current, v, idx->dims_aligned, *result, n, idx->cmp);
-
-    pthread_rwlock_unlock(&idx->rwlock);
-    if (allocated)
-        free_mem(v);
-    return SUCCESS;
-
+static int flat_search_n_mp(void *index, float32_t *vector, uint16_t dims, MatchResult **result, int n) {
+    return SYSTEM_ERROR;
 }
 
 
+
 /*
- * flat_search - Searches for the best matching vector in the flat index.
+ * search_mp_thread - Thread function for parallel nearest neighbor search.
  *
- * This function performs a nearest neighbor search in a linked list-based
- * flat index. It finds the vector with the smallest distance (or highest
- * similarity) to the given query vector.
+ * This function is executed by each thread in the multi-threaded search process.
+ * It performs a linear search using `flat_linear_search` on a specific subset 
+ * of the index defined in `ThreadData`.
+ *
+ * @param arg - Pointer to a `ThreadData` structure containing search parameters.
+ */
+void *search_mp_thread(void *arg) {
+    ThreadData *data = (ThreadData *)arg;
+    flat_linear_search(data->head, data->vector, data->dims, data->result, data->cmp);
+}
+
+/*
+ * flat_search_mp - Multi-threaded nearest neighbor search in a flat index.
+ *
+ * This function performs a multi-threaded search for the nearest neighbor 
+ * in a linked list-based flat index, distributing the search load among 
+ * multiple threads to improve performance.
  *
  * Steps:
- * 1. Validate input parameters.
+ * 1. Validate input parameters to ensure correctness.
  * 2. Allocate memory for an aligned copy of the input vector if necessary.
- * 3. Initialize the result structure.
- * 4. Acquire a read lock to ensure thread safety.
- * 5. Traverse the list and compute distances between stored vectors and the query vector.
- * 6. Store the best match found.
- * 7. Release the read lock.
- * 8. Free allocated memory if applicable.
+ * 3. Initialize the result structure with the worst possible match value.
+ * 4. Acquire a read lock to ensure consistency during the search.
+ * 5. Create threads, each processing a subset of the index.
+ * 6. Each thread performs a linear search on its assigned subset.
+ * 7. After all threads complete, merge the best match from each thread.
+ * 8. Free allocated memory and release the read lock.
  *
- * @param index  - Pointer to the flat index (`IndexFlat`).
+ * @param index  - Pointer to the multi-threaded flat index (`IndexFlatMp`).
  * @param vector - Pointer to the query vector.
  * @param dims   - Number of dimensions of the query vector.
  * @param result - Pointer to `MatchResult`, which will store the best match.
@@ -244,12 +228,14 @@ static int flat_search_n(void *index, float32_t *vector, uint16_t dims, MatchRes
  *         SYSTEM_ERROR if memory allocation fails.
  *         INDEX_EMPTY if no elements exist in the index.
  */
-static int flat_search(void *index, float32_t *vector, uint16_t dims, MatchResult *result) {
-    IndexFlat *idx = (IndexFlat *)index;
-    INodeFlat *current;
+static int flat_search_mp(void *index, float32_t *vector, uint16_t dims, MatchResult *result) {
+    IndexFlatMp *idx = (IndexFlatMp *)index;
+    ThreadData *data;
     float32_t *v;
     int allocated = 0;
+    int i;
 
+    // Validate input parameters
     if (index == NULL) 
         return INVALID_INDEX;
     if (vector == NULL)
@@ -259,6 +245,7 @@ static int flat_search(void *index, float32_t *vector, uint16_t dims, MatchResul
     if (result == NULL)
         return INVALID_RESULT;
 
+    // Allocate aligned memory for the vector if needed
     if (dims < idx->dims_aligned) {
         v = (float32_t *)calloc_mem(1, idx->dims_aligned * sizeof(float32_t));
         if (v == NULL)
@@ -269,21 +256,58 @@ static int flat_search(void *index, float32_t *vector, uint16_t dims, MatchResul
         v = vector;
     }
 
-    pthread_rwlock_rdlock(&idx->rwlock);
-    
-    current = idx->head;
-    if (current == NULL) {
-        pthread_rwlock_unlock(&idx->rwlock);
+    // Allocate memory for thread data
+    data = (ThreadData *)calloc_mem(idx->threads, sizeof(ThreadData));
+    if (data == NULL) {
         if (allocated)
             free_mem(v);
-        return INDEX_EMPTY;
+        return SYSTEM_ERROR;
     }
 
-    flat_linear_search(current, v, idx->dims_aligned, result, idx->cmp);
+    // Initialize the result with the worst possible match value
+    result->distance = idx->cmp->worst_match_value;
+    result->id = 0;
 
+    // Acquire a read lock to prevent modifications while searching
+    pthread_rwlock_rdlock(&idx->rwlock);
+    
+    // Create and launch threads for multi-threaded searching
+    for (i = 0; i < idx->threads; i++) {
+        data[i].vector = v;
+        data[i].dims = idx->dims_aligned;
+        
+        // Allocate memory for individual thread results
+        data[i].result = (MatchResult *)calloc_mem(1, sizeof(MatchResult));
+        data[i].cmp = idx->cmp;
+        data[i].head = idx->heads[i];
+
+        pthread_create(&data[i].thread, NULL, search_mp_thread, &data[i]);
+    }
+
+    // Wait for all threads to complete and merge the best results
+    for (i = 0; i < idx->threads; i++) {
+        pthread_join(data[i].thread, NULL);
+
+        // Compare results from all threads and keep the best match
+        if (idx->cmp->is_better_match(data[i].result->distance, result->distance)) {
+            result->id = data[i].result->id;
+            result->distance = data[i].result->distance;
+        }
+
+        // Free memory allocated for individual thread results
+        free_mem(data[i].result);
+    }
+
+    // Free allocated memory for thread data
+    free_mem(data);
+
+    // Release the read lock
     pthread_rwlock_unlock(&idx->rwlock);
+
+    // Free allocated vector memory if it was created
     if (allocated)
         free_mem(v);
+
     return SUCCESS;
 }
 
@@ -315,8 +339,8 @@ static int flat_search(void *index, float32_t *vector, uint16_t dims, MatchResul
  *         INVALID_DIMENSIONS if the vector dimensions do not match the index.
  *         SYSTEM_ERROR if memory allocation fails.
  */
-static int flat_insert(void *index, uint64_t id, float32_t *vector, uint16_t dims) {
-    IndexFlat *ptr = (IndexFlat *)index;
+static int flat_insert_mp(void *index, uint64_t id, float32_t *vector, uint16_t dims) {
+    IndexFlatMp *ptr = (IndexFlatMp *)index;
     INodeFlat *node;
     Vector    *nvec;
 
@@ -343,7 +367,7 @@ static int flat_insert(void *index, uint64_t id, float32_t *vector, uint16_t dim
     node->prev = NULL;
 
     node->vector = nvec;
-    insert_node(&(ptr->head), node);
+    insert_node(&(ptr->heads[(ptr->rr++)%ptr->threads]), node);
     ptr->elements++;
 
     pthread_rwlock_unlock(&ptr->rwlock);
@@ -358,26 +382,30 @@ static int flat_insert(void *index, uint64_t id, float32_t *vector, uint16_t dim
  *
  * @return SUCCESS on success, INVALID_INDEX if index is NULL.
  */
-static int flat_release(void **index) {
+static int flat_release_mp(void **index) {
+    int i;
     if (!index || !*index)
         return INVALID_INDEX;
 
-    IndexFlat *idx = *index;
+    IndexFlatMp *idx = *index;
     INodeFlat *ptr;
 
     pthread_rwlock_wrlock(&idx->rwlock);
 
-    ptr = idx->head;
-    while (ptr) {
-        idx->head = ptr->next;
-        idx->elements--;
-        free_vector(&ptr->vector);
-        free_mem(ptr);
-        ptr = idx->head;
+    for (i = 0; i < idx->threads; i++) {
+        ptr = idx->heads[i];
+        while (ptr) {
+            idx->heads[i] = ptr->next;
+            idx->elements--;
+            free_vector(&ptr->vector);
+            free_mem(ptr);
+            ptr = idx->heads[i];
+        }
     }
 
     pthread_rwlock_unlock(&idx->rwlock);
-    pthread_rwlock_destroy(&idx->rwlock); 
+    pthread_rwlock_destroy(&idx->rwlock);
+    free_mem(idx->heads);
     free_mem(idx);  
     *index = NULL;
     return SUCCESS;
@@ -398,19 +426,19 @@ static int flat_release(void **index) {
  *
  * @return SUCCESS on success, SYSTEM_ERROR on failure.
  */
-int flat_index(Index *idx, int method, uint16_t dims) {
-    idx->data = flat_init(method, dims);
+int flat_index_mp(Index *idx, int method, uint16_t dims) {
+    idx->data = flat_mp_init(method, dims);
     if (idx->data == NULL) {
         free_mem(idx);
         return SYSTEM_ERROR;
     }
-    idx->name     = "flat";
+    idx->name     = "flat_mp";
     idx->context  = NULL;
-    idx->search   = flat_search;
-    idx->search_n = flat_search_n;
-    idx->insert   = flat_insert;
-    idx->delete   = flat_delete;
-    idx->_release = flat_release;
+    idx->search   = flat_search_mp;
+    idx->search_n = flat_search_n_mp;
+    idx->insert   = flat_insert_mp;
+    idx->delete   = flat_delete_mp;
+    idx->_release = flat_release_mp;
 
     return SUCCESS;
 }

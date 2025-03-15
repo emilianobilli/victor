@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import insightface
+from victor import VictorDBClient
 
 mp_face_mesh = mp.solutions.face_mesh
 
@@ -15,7 +16,7 @@ class Brad(object):
         
         try:
             self.model = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-            self.model.prepare(ctx_id=0)
+            self.model.prepare(ctx_id=0, det_size=(112, 112))
         except Exception as e:
             print("Error initializing InsightFace:", e)
             self.model = None
@@ -85,7 +86,7 @@ class Brad(object):
                     raise RuntimeError("InsightFace model is not available")
 
                 embedding = self.model.models["recognition"].forward(face_normalized)
-                return embedding
+                return [embedding[0].tolist()]
             else:
                 print("Warning: No faces detected in the image")
                 return []
@@ -93,5 +94,60 @@ class Brad(object):
             print(f"Error processing image '{image_path}':", e)
             return []
 
-brad = Brad()
-print(brad.get_face_embeddings("input.jpg"))
+
+import numpy as np
+
+class Brad2:
+    def __init__(self):
+        try:
+            # Inicializar InsightFace con detección en 640x640
+            self.model = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+            self.model.prepare(ctx_id=0, det_size=(640, 640))
+        except Exception as e:
+            print("Error initializing InsightFace:", e)
+            self.model = None
+
+    def get_face_embeddings(self, image_path: str):
+        try:
+            image = cv2.imread(image_path)
+            if image is None:
+                raise ValueError(f"Failed to load image from '{image_path}'")
+
+            # Convertir imagen a RGB (InsightFace usa RGB, OpenCV usa BGR)
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+            # Detectar rostros en la imagen
+            faces = self.model.get(image_rgb)
+
+            if not faces:
+                print("Warning: No faces detected in the image", image_path)
+                return []
+
+            # Extraer embeddings del primer rostro detectado
+            embeddings = faces[0].embedding
+
+            # Normalizar embeddings a norma L2 = 1
+            embeddings = embeddings / np.linalg.norm(embeddings)
+
+            # Verificar que la normalización es correcta
+            norm = np.linalg.norm(embeddings)
+            print("Norma L2 del embedding después de normalizar:", norm)  # Debería ser ≈ 1
+
+            return [embeddings.tolist()]
+
+        except Exception as e:
+            print(f"Error processing image '{image_path}':", e)
+            return []
+
+
+brad = Brad2()
+client = VictorDBClient()
+#print(brad.get_face_embeddings("sarah_shani.jpg"))
+client.insert("1", brad.get_face_embeddings("alguien.jpg"), {"data": "alguien.jpg"})
+client.insert("1", brad.get_face_embeddings("scarlett.jpg"), {"data": "scarlett.jpg"})
+client.insert("1", brad.get_face_embeddings("superman.jpg"), {"data":"superman.jpg"})
+client.insert("1", brad.get_face_embeddings("ane.jpg"), {"data": "anya_taylor"})
+
+print(client.search(brad.get_face_embeddings("test1.jpg")[0],5))
+#print(client.search(brad.get_face_embeddings("test2.jpg")[0],5))
+#print(client.search(brad.get_face_embeddings("test3.jpg")[0],5))

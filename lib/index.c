@@ -39,6 +39,7 @@
 #include "index.h"
 #include "mem.h"
 #include "index_flat.h"
+#include "index_flat_mp.h"
 
 int search_n(Index *index, float32_t *vector, uint16_t dims, MatchResult **results, int n) {
     if (!index || !index->data || !index->search_n)
@@ -121,7 +122,13 @@ Index *alloc_index(int type, int method, uint16_t dims) {
                 return NULL;
             }
             break;
-
+        
+        case FLAT_INDEX_MP:
+            if (flat_index_mp(idx, method, dims) != SUCCESS) {
+                free_mem(idx);
+                return NULL;
+            }
+            break;
         /*
         Future index types can be added here
         

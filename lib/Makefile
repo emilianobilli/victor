@@ -4,7 +4,7 @@ TARGET = testdb
 
 LIBNAME = libvictor.so
 
-SRCS = test.c index.c index_flat.c math.c mem.c method.c vector.c
+SRCS = test.c index.c index_flat.c math.c mem.c method.c vector.c iflat_utils.c index_flat_mp.c
 OBJS = $(SRCS:.c=.o)
 
 # Compiler flags (Optimized for ARMv8-A / AArch64)
@@ -20,8 +20,8 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(LIBNAME): index.o index_flat.o math.o mem.o method.o vector.o
-	$(CC) -shared -o $(LIBNAME) index.o index_flat.o math.o mem.o method.o vector.o $(LDFLAGS)
+$(LIBNAME): index.o index_flat.o math.o mem.o method.o vector.o iflat_utils.o index_flat_mp.o
+	$(CC) -shared -o $(LIBNAME) index.o index_flat.o math.o mem.o iflat_utils.o index_flat_mp.o method.o vector.o $(LDFLAGS)
 
 
 clean:
